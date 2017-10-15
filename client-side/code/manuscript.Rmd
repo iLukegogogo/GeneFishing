@@ -1,0 +1,833 @@
+---
+title: "Manuscript R makrdown"
+output: html_document
+---
+This is an R Markdown document to show all the analysis results and figures used for the Gene Fishing paper
+
+#---------------------------------------------------------------------------------------------
+#  0.   Definition of some functions used in the analysis
+###0.1 P value assignment  for Gene Fishing with Binomial distribution
+```{r echo=FALSE}
+require(ggplot2)
+require(plyr)
+require(dplyr)
+require(gplots)
+require(foreach)
+require(pheatmap)
+require(reshape2)
+require(RColorBrewer)
+require(LICORS)
+
+cholesterol.gene <- read.table("~/Project/OaklandChildrenHospital/original_data/cholesterol.gene.list", quote="\"", stringsAsFactors=FALSE)$V1 %>% as.character
+bait <- c('ENSG00000112972', #HMGCS1
+          'ENSG00000113161', #HMGCR
+          'ENSG00000110921', #MVK
+          'ENSG00000167508', #MVD
+          'ENSG00000067064', #IDI1
+          'ENSG00000160752', #FDPS
+          'ENSG00000079459', #FDFT1
+          'ENSG00000104549', #SQLE
+          'ENSG00000160285', #LSS
+          'ENSG00000001630', #CYP51A
+          'ENSG00000149809', #TM7SF2
+          'ENSG00000052802', #SC4MOL
+          'ENSG00000147383', #NSDHL
+          'ENSG00000132196', #HSD17B7
+          'ENSG00000147155', #EBP
+          'ENSG00000109929', #SC5D
+          'ENSG00000172893', #DHCR7
+          'ENSG00000116133', #DHCR24
+          
+          'ENSG00000186480', #INSIG1
+          'ENSG00000130164', #LDLR
+          'ENSG00000198911' #SREBF2
+)
+
+assign.p.value.with.binomial <- function(capture.freq.df,total.no.of.gene,total.no.of.gene.fishing.round=1000){
+    alpha          <- sum(capture.freq.df$fish.freq) / total.no.of.gene
+    p.value        <- pbinom(capture.freq.df$fish.freq * 1000,1000,alpha,lower.tail = FALSE)
+    names(p.value) <- capture.freq.df$fish.id
+    p.value
+  
+}
+
+
+get.spectral.clustering.coordinates <- function(A,method.name,force.no.of.cluster=-1){ 
+  diag(A)  <-   0
+  A        <-  abs(A)
+  d        <-  apply(A,1,sum)
+  I        <-  diag(1,nrow = nrow(A)) 
+  
+  if(method.name == 'random.walk' ){
+    L    <-   I -  diag(1/d) %*% A 
+  }else{
+    L    <-   I -  diag(1/sqrt(d)) %*% A %*% diag(1/sqrt(d))
+  }
+  
+  #L is positive semi-definite and have n non-negative real-valued eigenvalues
+  tmp             <-  eigen(L)
+  eigen.values    <-  tmp$values[length(tmp$values):1]
+  eigen.vectors   <-  tmp$vectors[,length(tmp$values):1]
+  
+  q1              <-  quantile(eigen.values)[2]
+  q3              <-  quantile(eigen.values)[4]
+  low             <-  q1 - 3*(q3 - q1)
+  up              <-  q1 + 3*(q3 - q1)
+  k               <-  sum(eigen.values < low)  # pick out eigen-values that are relatively small
+  if( force.no.of.cluster > 0){
+    k <- force.no.of.cluster
+  }
+  if(k == 1){
+    list(eigen.values=eigen.values,no.of.cluster=1)
+  }else{
+    coordinate.matrix          <- eigen.vectors[,2:(k+1)] # pick out the eigen-vectors associated with the K smallest eigen-values
+    if(method.name == 'jordan'){
+      coordinate.matrix      <- apply(coordinate.matrix,MARGIN=1,function(x) x/ (sum(x*x) %>% sqrt) ) %>% t # re-normalize to an unit sphere
+    }
+    rownames(coordinate.matrix)  <- rownames(A)
+    colnames(coordinate.matrix)  <- paste('eigen',1:(k),sep="-")
+    list(coordinates=coordinate.matrix,eigen.values=eigen.values,no.of.cluster=k,low.bound=low)
+  }
+  
+}
+
+#socre.list, value larger is bettern
+get.overlapping.between.two.score.list <- function(score.list.1,score.list.2){
+    top.cnt <- seq(from=20,to=100,by = 1)
+    the.100.trial <- foreach(j = 1:100,.combine='rbind' ) %do% {
+        rank.list.1    <- rank(1-score.list.1,   ties.method = 'random')
+        rank.list.2    <- rank(1-score.list.2,   ties.method = 'random')
+        rs <- foreach(i=top.cnt,.combine='c') %do% {
+            flag1 <- rank.list.1    <= i
+            flag2 <- rank.list.2    <= i
+            overlapping <- intersect( names(rank.list.1)[flag1], 
+                                      names(rank.list.2)[flag2] 
+            )  %>% length 
+            c(overlapping)
+        }
+        rs
+    }
+    apply(the.100.trial,2,mean)
+}
+
+
+
+
+prism.plot <- function(x,y,...){
+    par(mar=c(5.1,5.1,1.1,1.1))
+    arg.list          <- list(...)
+    arg.list$cex.lab  <- NULL
+    arg.list$cex.axis <- NULL
+    arg.list$font     <- NULL
+    plot(x=x,y=y,cex.lab=3.5,font=2,cex.axis=2,...)
+
+    axis(side = 1,labels = FALSE,lwd = 15,col = 'black',at=c(2*min(x) - max(x),2 *max(x) - min(x)))
+    axis(side = 1,labels = FALSE,lwd.ticks = 15)
+    axis(side = 3,labels = FALSE,lwd = 3,col = 'white',at=c(2*min(x) - max(x),2 *max(x) - min(x)))
+
+    axis(side = 2, lwd = 15,col = 'black',labels = TRUE,at=c(2*min(y) - max(y),2*max(y) - min(y)))
+    axis(side = 2, labels = FALSE,lwd.ticks = 15)
+    axis(side = 4, lwd = 3,col = 'white',labels = TRUE,at=c(2*min(y) - max(y),2*max(y) - min(y)))
+
+
+}
+
+
+compute.number.of.sample.per.bin <- function(x){
+    bin.vec <- seq(0,1,0.1)
+    rs <- foreach(j=1:9,.combine='c') %do%{
+        sum(x>=bin.vec[j] & x<bin.vec[j+1])  
+    }
+    rs <- c(rs, sum(x>=bin.vec[10] & x<=bin.vec[11]))
+    rs
+    
+}
+```
+
+#---------------------------------------------------------------------------------------------
+#SECTION: Identification of bait genes
+```{r echo=FALSE}
+setwd('~/Project//GeneFishing')
+load('RData/fishing.in.LCL.CHORI.ke.vs.GEUVADIS.RData')
+load('RData/CHORI.peer.normalized.rpkm.RData')
+CHORI.LCL.data    <- peer.normalized.rpkm.25
+load('RData//GEUVADIS.peer.normalized.rpkm.RData')
+GEUVADIS.LCL.data <- peer.normalized.rpkm.25
+```
+
+<b>Draw the clustering plot and heatmap of bait genes (CHORI).The ENHANCED version of the figure generated by PRISM is in the slides</b>
+```{r}
+tmp     <- CHORI.LCL.data[,colnames(CHORI.LCL.data) %in% cholesterol.gene]
+A       <- cor(tmp,method='spearman') %>% abs
+rs      <- get.spectral.clustering.coordinates(A,method.name='berkeley.405')
+col.vec <- ifelse(rownames(rs$coordinates) %in% bait, 'red','black')
+coordinates.matrix <- rs$coordinates
+prism.plot(coordinates.matrix[,1],coordinates.matrix[,2],pch=19,xlab='eigen-1',ylab='eigen-2',cex=2,col=col.vec)
+
+id.vec             <- c( bait, setdiff(rownames(coordinates.matrix),bait))
+```
+
+<b>Draw heatmap of correlation matrix</b>
+```{r}
+pheatmap(A[id.vec,id.vec],cluster_rows = FALSE,cluster_cols = FALSE,show_rownames = FALSE,show_colnames = FALSE,border_color = 'black',fontsize = 24)
+```
+
+
+
+
+<b>Draw the clustering plot and heatmap of bait genes (GEUVADIS).The ENHANCED version of the figure generated by PRISM is in the slides</b>
+```{r}
+tmp     <- GEUVADIS.LCL.data[,colnames(GEUVADIS.LCL.data) %in% cholesterol.gene]
+A       <- cor(tmp,method='spearman') %>% abs
+rs      <- get.spectral.clustering.coordinates(A,method.name='berkeley.405',force.no.of.cluster = 3)
+col.vec <- ifelse(rownames(rs$coordinates) %in% bait, 'red','black')
+coordinates.matrix <- rs$coordinates
+prism.plot(coordinates.matrix[,1],coordinates.matrix[,2],pch=19,xlab='eigen-1',ylab='eigen-2',cex=2,col=col.vec)
+
+id.vec             <- c( bait, setdiff(rownames(coordinates.matrix),bait))
+```
+
+<b>Draw heatmap of correlation matrix</b>
+```{r}
+pheatmap(A[id.vec,id.vec],cluster_rows = FALSE,cluster_cols = FALSE,show_rownames = FALSE,show_colnames = FALSE,border_color = 'black',fontsize = 24)
+```
+
+
+
+
+
+#---------------------------------------------------------------------------------------------
+#SECTION I :  Gene Fishing results in CHORI LCL cell line (with Ke's normalized data)
+```{r}
+#remove bait genes from the expression matrix
+CHORI.LCL.data    <- CHORI.LCL.data[,!(colnames(CHORI.LCL.data) %in% bait)]
+GEUVADIS.LCL.data <- GEUVADIS.LCL.data[,!(colnames(GEUVADIS.LCL.data) %in% bait)]
+```
+
+###1. Show histogram of capture frequency of CHORI LCL and GEUVADIS LCL Gene Fishing results
+```{r}
+hist(CHORI.LCL.fish.freq.df$fish.freq,xlab='CFR (capture frequency) ',breaks=50,cex.axis=2,cex.lab=3,col='black',font=2,main='CHORI LCL')
+complete.CHORI.LCL.fish.freq <- c(CHORI.LCL.fish.freq.df$fish.freq,rep(0,ncol(CHORI.LCL.data)- nrow(CHORI.LCL.fish.freq.df)    ))
+bin.value <- compute.number.of.sample.per.bin(complete.CHORI.LCL.fish.freq)
+
+
+hist(GEUVADIS.LCL.fish.freq.df$fish.freq,xlab='CFR (capture frequency) ',breaks=50,cex.axis=2,cex.lab=3,col='black',font=2,main='GEUVADIS LCL')
+complete.GEUVADIS.LCL.fish.freq <- c(GEUVADIS.LCL.fish.freq.df$fish.freq,rep(0,ncol(GEUVADIS.LCL.data)- nrow(GEUVADIS.LCL.fish.freq.df)    ))
+bin.value <- compute.number.of.sample.per.bin(complete.GEUVADIS.LCL.fish.freq)
+
+
+
+```
+
+###2. Compute adjusted p value, bonforenni correction
+```{r}
+CHORI.p.value          <- assign.p.value.with.binomial(CHORI.LCL.fish.freq.df,ncol(CHORI.LCL.data),1000)
+CHORI.adjusted.p.value <- CHORI.p.value  * ncol(CHORI.LCL.data)
+CHORI.sig.gene         <- names(CHORI.adjusted.p.value)[CHORI.adjusted.p.value <= 0.001]
+sprintf("Number of significant genes passing 0.001 is %d",sum(CHORI.adjusted.p.value <=0.001))
+```
+
+###3. Pick out example genes and check their functional annotations (let us only care about genes whose capture.freq >=0.99)
+```{r}
+example.gene.id <- CHORI.LCL.fish.freq.df$fish.id[CHORI.LCL.fish.freq.df$fish.freq >=0.99] %>% as.character
+```
+<b>Genes whose cpature frequency is larger than 0.99: </b>
+```{r echo=FALSE}
+print(example.gene.id)
+```
+<b>The detailed annotation is in the file [CHORI.LCL.gene.fishing.result.annotation.xlsx](/Users/liuke/Project/GeneFishing/Manuscript/Tables/CHORI.LCL.gene.fishing.result.annotation.xlsx) </b>
+
+
+###4. Check reproducibility  between CHORI LCL Gene Fishing results and GEUVADIS LCL Gene Fishing results
+```{r}
+common.gene               <- intersect(colnames(CHORI.LCL.data),colnames(GEUVADIS.LCL.data))
+
+CHORI.p.value          <- assign.p.value.with.binomial(CHORI.LCL.intersected.fish.freq.df,length(common.gene),1000)
+CHORI.adjusted.p.value <- CHORI.p.value  * length(common.gene) 
+CHORI.sig.gene         <- names(CHORI.adjusted.p.value)[CHORI.adjusted.p.value <= 0.001]
+
+GEUVADIS.p.value          <- assign.p.value.with.binomial(GEUVADIS.LCL.intersected.fish.freq.df,length(common.gene),1000)
+GEUVADIS.adjusted.p.value <- GEUVADIS.p.value  * length(common.gene) 
+GEUVADIS.sig.gene         <- names(GEUVADIS.adjusted.p.value)[GEUVADIS.adjusted.p.value <= 0.001]
+
+GEUVADIS.sig.gene         <- GEUVADIS.sig.gene [GEUVADIS.sig.gene  %in% common.gene]
+CHORI.sig.gene            <- CHORI.sig.gene [CHORI.sig.gene  %in% common.gene]
+
+overlapping.p.value <- phyper( length(intersect(GEUVADIS.sig.gene,CHORI.sig.gene)),
+                               length(CHORI.sig.gene),
+                               length(common.gene) - length(CHORI.sig.gene),
+                               length(GEUVADIS.sig.gene),
+                               lower.tail=FALSE
+                              )
+sprintf('P value of the overlapping is %s',overlapping.p.value %>% as.character)
+```
+<b>Draw venn diagram to show the overlapped SIGNIFICANT genes</b>
+```{r}
+venn(list(CHORI = CHORI.sig.gene,GEUVADIS = GEUVADIS.sig.gene),show.plot = TRUE)
+```
+
+<b>Draw venn diagram to show the overlapped high-capture-frequency (>=0.99,>=0.9) genes</b>
+```{r}
+venn(list(CHORI    = CHORI.LCL.intersected.fish.freq.df$fish.id[CHORI.LCL.intersected.fish.freq.df$fish.freq>=0.99] %>% as.character,
+          GEUVADIS = GEUVADIS.LCL.intersected.fish.freq.df$fish.id[GEUVADIS.LCL.intersected.fish.freq.df$fish.freq>=0.99] %>% as.character),
+     show.plot = TRUE)
+venn(list(CHORI    = CHORI.LCL.intersected.fish.freq.df$fish.id[CHORI.LCL.intersected.fish.freq.df$fish.freq>=0.9] %>% as.character,
+          GEUVADIS = GEUVADIS.LCL.intersected.fish.freq.df$fish.id[GEUVADIS.LCL.intersected.fish.freq.df$fish.freq>=0.9] %>% as.character),
+     show.plot = TRUE)
+```
+
+
+
+#---------------------------------------------------------------------------------------------
+#SECTION II :  Gene Fishing results in GTex liver
+```{r}
+setwd('~/Project//GeneFishing')
+load('RData/fishing.in.GTex.with.ncRNA.median.rpkm.larger.than.0.1.RData')
+load('RData/normalized.GTex.with.ncRNA.median.larger.than.0.1.RData')
+s                    <- sapply(normalized.GTex.data,nrow)
+normalized.GTex.data <- normalized.GTex.data[s > 2] # exclude tissues whose total sample > 100 while RNA-Seq sample<100
+fish.list            <- fish.list[names(normalized.GTex.data)]
+
+# Well, marisa are doning experiments based on a previous version of liver gene fishing results. To keep it consistent, let us replace the 
+# liver entry with that results. But the different version are rather similar
+tmp                  <- read.csv("~/Project/GeneFishing/Results/liver.gene.fishing.with.median.rpkm.larger.than.0.1.with.annotation.csv", stringsAsFactors=FALSE)[,c('gene.id','capture.freq')]
+colnames(tmp)        <- c('fish.id','fish.freq')
+fish.list[['Liver']] <- tmp
+
+```
+
+###1. Show histogram of capture frequency of GTex liver Gene Fishing results
+```{r}
+GTex.liver.fish.freq.df   <- fish.list[['Liver']]
+GTex.liver.expr.matrix    <- normalized.GTex.data[['Liver']]
+GTex.liver.expr.matrix    <- GTex.liver.expr.matrix[,!(colnames(GTex.liver.expr.matrix) %in% bait)]
+
+hist(GTex.liver.fish.freq.df$fish.freq,xlab='CFR (capture frequency)',breaks=50,main='',cex.axis=1.5,cex.lab=2.5,col='black',font=2)
+complete.GTex.liver.fish.freq <- c(GTex.liver.fish.freq.df$fish.freq,rep(0,ncol(GTex.liver.expr.matrix )- nrow(GTex.liver.fish.freq.df)    ))
+bin.value <- compute.number.of.sample.per.bin(complete.GTex.liver.fish.freq )
+
+
+
+```
+
+###2. Compute adjusted p value, bonforenni correction
+```{r}
+GTex.liver.p.value          <- assign.p.value.with.binomial(GTex.liver.fish.freq.df,ncol(GTex.liver.expr.matrix),1000)
+GTex.liver.adjusted.p.value <- GTex.liver.p.value  * ncol(GTex.liver.expr.matrix)
+sprintf("Number of significant genes passing 0.001 is %d",sum(GTex.liver.adjusted.p.value <=0.001))
+```
+
+###3. Pick out example genes and check their functional annotations (let us only care about genes whose capture.freq >=0.99)
+```{r}
+example.gene.id <- GTex.liver.fish.freq.df$fish.id[GTex.liver.fish.freq.df$fish.freq >=0.99] %>% as.character
+```
+<b>Genes whose cpature frequency is larger than 0.99: </b>
+```{r echo=FALSE}
+print(example.gene.id)
+```
+<b>The detailed annotation is in the file [GTex.liver.gene.fishing.result.annotation.xlsx](/Users/liuke/Project/GeneFishing/Manuscript/Tables/GTex.liver.gene.fishing.result.annotation.xlsx) </b>
+
+###3. Compare Gene Fishing reulsts between LCL and Liver
+```{r}
+CHORI.sig.gene         <- names(CHORI.adjusted.p.value)[CHORI.adjusted.p.value <= 0.001]
+GTex.liver.sig.gene    <- names(GTex.liver.adjusted.p.value)[CHORI.adjusted.p.value <= 0.001]
+```
+<b>Draw venn gram to show overlapped SIGNIFICANT fished out genes</b>
+```{r}
+venn(list(CHORI.LCL=CHORI.sig.gene,GTex.Liver=GTex.liver.sig.gene))
+```
+
+###4. Cholesterol assay results (from Andrea)
+
+
+#---------------------------------------------------------------------------------------------
+#SECTION III :  Pan-tissue Gene Fishing results
+```{r eccho=FALSE}
+setwd('~/Project/GeneFishing/')
+#load('RData/fishing.in.GTex.with.ncRNA.median.rpkm.larger.than.0.1.RData')  
+load('RData/classify.tissue.1000.RData')
+```
+
+###1. Pick out the 14 "fishable tissues" according to bait.clsuter.purity
+```{r}
+df <- foreach(cut.off = names(purity.list),.combine='rbind') %do%{
+    L <- purity.list[[cut.off]]  
+    L <- L[names(normalized.GTex.data)]
+    draw.df <- foreach(tissue = names(L),.combine='rbind') %do% {
+      data.frame(tissue=tissue,purity=L[[tissue]])  
+    }
+    meta <- ddply(draw.df,.(tissue),function(x) data.frame(median=median(x$purity),var=var(x$purity),mean=mean(x$purity) )  )
+    meta         <- arrange(meta,mean)
+    meta$cut.off <- cut.off
+    meta
+}
+
+df           <- dcast(df,tissue ~ cut.off,value.var='mean')
+rownames(df) <- df$tissue
+df$tissue    <- NULL
+m            <- as.matrix(df)
+s            <- apply(m,1,sum)
+m            <- m[order(s),]
+pheatmap(m,cluster_rows = FALSE,cluster_cols = FALSE,border_color = 'black',fontsize = 22,fontsize_col = 22)
+fishable.tissue <- rownames(m)[(nrow(m)-13) : nrow(m)]
+```
+<b>The fishable tissues are :</b>
+```{r}
+print(fishable.tissue)
+```
+
+<b>Plot var.of.cluster.purity vs mean.of.cluster.purity</b>
+```{r}
+s            <- apply(m,1,sum)/11
+d            <- apply(m,1,var)
+prism.plot(s,d,pch=19,cex=2,xlab='average cluster.purity',ylab='variance')
+```
+
+
+
+
+
+###2. Pick out  significant fished out genes in the 14 fishable tissues and show their pattern
+```{r fig.width=20}
+gene.df <- foreach(tissue = fishable.tissue,.combine='rbind') %do% {
+    gene.expr    <- normalized.GTex.data[[tissue]]
+    gene.expr    <- gene.expr[,!(colnames(gene.expr) %in% bait)]
+    df           <- fish.list[[tissue]]
+    p.value      <- assign.p.value.with.binomial(df,total.no.of.gene = ncol(gene.expr))
+    adjusted.p.value  <- p.value *  (ncol(gene.expr))
+    data.frame(tissue = tissue,gene.id=names(adjusted.p.value)[adjusted.p.value <= 0.001] )
+}
+gene.df$value <- 1
+tmp           <- dcast(gene.df,gene.id ~ tissue,value.var='value')
+rownames(tmp) <- tmp$gene.id
+tmp$gene.id   <- NULL
+m             <- as.matrix(tmp)
+m[is.na(m)]   <- 0
+row.sum       <- apply(m,1,sum)
+flag                 <- row.sum == 1
+tissue.specific.gene <- names(row.sum)[flag]
+m                    <- m[order(row.sum,decreasing = TRUE),]
+col.sum              <- apply(m[tissue.specific.gene,],2,sum)
+m                    <- m[,order(col.sum,decreasing = TRUE)]
+
+tt        <- 1:ncol(m)
+names(tt) <- colnames(m)
+l <- foreach(g = tissue.specific.gene,.combine='c') %do% {
+  tt[which(m[g,] == 1)] 
+  
+}
+tissue.specific.gene <- tissue.specific.gene[order(l)]
+common.gene <- rownames(m)[ ! rownames(m) %in% tissue.specific.gene]
+common.gene <- common.gene[order(row.sum[common.gene],decreasing = TRUE)]
+m           <- m[c(common.gene,tissue.specific.gene),]
+binomial.sig.gene.matrix  <- m
+
+
+row.sum        <- apply(m,1,sum)
+data1          <- m[row.sum >=7,]
+data1[data1>0] <- 0.7
+data2          <- m[row.sum > 1 & row.sum <7,]
+data2[data2>0] <- 0.5
+data3          <- m[row.sum == 1 ,]
+data3[data3>0] <- 0.3
+draw.m         <- rbind(data1,data2,data3)
+draw.m[draw.m ==0] <- 0.1
+#color.vec <- brewer.pal(n=12, name="Paired")[c(2,4,8,11)]
+color.vec <- c('#C0C0C0','#33A02C', '#FF7F00','#800080')
+color.vec <- c('#C0C0C0','#00FF00', '#0000FF','#FF0000')
+
+
+annotation.row           <- data.frame( gene.class = c(rep('class.I',nrow(data1)),rep('class.II',nrow(data2)),rep('class.III',nrow(data3))))
+rownames(annotation.row) <- rownames(draw.m)
+ann_colors               <- list(gene.class=c(class.I = color.vec[4],class.II=color.vec[3],class.III=color.vec[2]))
+
+pheatmap(draw.m,cluster_rows = FALSE,cluster_cols = FALSE,show_rownames = FALSE,border_color = 'black',breaks = c(0,0.2,0.4,0.6,0.8),color=color.vec,fontsize_col = 28,annotation_colors = ann_colors,legend = FALSE,annotation_legend = FALSE)
+
+```
+
+
+###3. Compare p-value assignment results between binomial and permutation
+```{r}
+setwd('~/Project/GeneFishing/')
+load('RData/fishing.in.permutation.GTex.RData')
+
+gene.df <- foreach(tissue = fishable.tissue,.combine='rbind') %do% {
+    gene.expr           <- normalized.GTex.data[[tissue]]
+    gene.expr           <- gene.expr[,!(colnames(gene.expr) %in% bait)]
+    df.p                <- permutation.fish.list[[tissue]]
+    capture.freq        <- rep(0,times=ncol(gene.expr))
+    names(capture.freq) <- colnames(gene.expr)
+    df                  <- fish.list[[tissue]]
+    capture.freq[df$fish.id %>% as.character] <- df$fish.freq
+    p.value                                   <- sapply(capture.freq, function(x)  sum(df.p$fish.freq > x) / ncol(gene.expr)   )
+    adjusted.p.value                          <- p.value * ncol(gene.expr) 
+    data.frame(tissue = tissue,gene.id=names(adjusted.p.value)[adjusted.p.value <= 0.001] )
+}
+gene.df$value <- 1
+tmp           <- dcast(gene.df,gene.id ~ tissue,value.var='value')
+rownames(tmp) <- tmp$gene.id
+tmp$gene.id   <- NULL
+m             <- as.matrix(tmp)
+m[is.na(m)]   <- 0
+permutation.sig.gene.matrix  <- m
+permutation.sig.gene.matrix  <- permutation.sig.gene.matrix[,colnames(binomial.sig.gene.matrix)]
+
+prism.plot(y=apply(permutation.sig.gene.matrix,2,sum),
+     x=apply(binomial.sig.gene.matrix,2,sum),
+     xlim=c(10,400),
+     ylim=c(10,400),
+     xlab='number of significant genes (binomial distribution)',
+     ylab='number of significant genes (permutation test)',
+     main='',col='black',pch=19,cex.lab=2.5,cex=2
+     )
+lines(c(0,400),c(0,400),lwd=5)
+```
+
+
+<b> Show that commoon cholesterol regulators are quite stable</b>
+
+```{r}
+a <- apply(binomial.sig.gene.matrix,1,sum)
+b <- apply(permutation.sig.gene.matrix,1,sum)
+venn(list(binomial = names(a)[a>=7],permutation = names(b)[b >=7]))
+```
+
+```{r}
+if(!file.exists('~/Project/GeneFishing/Manuscript/Tables/binomial.sig.gene.matrix.csv')){
+    write.csv(x=binomial.sig.gene.matrix,file='~/Project/GeneFishing/Manuscript/Tables/binomial.sig.gene.matrix.csv',row.names=TRUE,quote=FALSE)
+}
+```
+<b>The binomial.sig.gene.matrix is in the file [binomial.sig.gene.matrix.csv](/Users/liuke/Project/GeneFishing/Manuscript/Tables/binomial.sig.gene.matrix.csv),the TOP 47 genes are common choelsterol regulators which are SIGNIFICANT in at least 7 tissues</b>
+
+
+
+###5. Interactions between cholesterol metabolism and immune system
+
+<b> KEGG  analysis of the 1121 genes (in the  binomial.sig.gene.matrix.csv) identifies enrichment on the T.cell.receptor pathway.[T.cell.receptor.pathway.png](/Users/liuke/Project/GeneFishing/Manuscript/Figure/T.cell.receptor.pathway.png),the figure shows all genes on the pathway and the 17 genes which are identified by Gene Fishing  are labeled by RED STAR  </b>
+
+<b> The id of the 17 genes are in the file [T.cell.receptor.pathway.gene.csv](/Users/liuke/Project/GeneFishing/Manuscript/Tmp/T.cell.receptor.gene.csv)</b>
+
+```{r}
+T.cell.receptor.gene.df <- read.delim("~/Project/GeneFishing/Manuscript/Tmp/T.cell.receptor.gene.csv", header=FALSE, stringsAsFactors=FALSE)
+T.cell.receptor.gene    <- T.cell.receptor.gene.df$V1 %>% as.character
+data           <- apply(binomial.sig.gene.matrix[T.cell.receptor.gene,],2,sum)
+data           <- sort(data,decreasing = TRUE)
+```
+<b> Number of T cell receptor pathway genes in each of the tissue are shown, Aotra has the most</b>
+```{r}
+data
+```
+
+
+<b> Show the "fishing" pattern of T cell receptor pathway genes in each of the tissue </b>
+```{r}
+pheatmap(binomial.sig.gene.matrix[T.cell.receptor.gene,],cluster_cols = FALSE,cluster_rows = FALSE)
+```
+
+
+
+###6. Draw the co-expression heatmap  betwenn 101 fished out genes of Aorta, pick out the 22 immune-associated genes
+```{r}
+tissue      <- 'Artery - Aorta'
+expr.matrix <- normalized.GTex.data[[tissue]]  
+sig.gene    <- rownames(binomial.sig.gene.matrix)[binomial.sig.gene.matrix[,tissue] == 1] %>% as.character
+A           <- cor(expr.matrix[,c(sig.gene)],method='spearman') %>% abs
+rs          <-  get.spectral.clustering.coordinates(A,method.name='berkeley.405',3)
+cluster.rs  <- kmeanspp(rs$coordinates,k=rs$no.of.cluster)
+cluster.vec <- cluster.rs$cluster %>% sort
+df          <- data.frame( 
+                           #is.bait.gene       =  (names(cluster.vec) %in% bait)  %>% as.integer %>% factor,
+                           #cluster.membership =  cluster.vec %>% factor,
+                           is.T.cell.receptor.pathway.gene       =  (names(cluster.vec) %in% T.cell.receptor.gene)  %>% as.integer %>% factor
+
+                         )
+rownames(df) <- names(cluster.vec)
+pheatmap(A[names(cluster.vec),names(cluster.vec)],cluster_rows = F,cluster_cols = F,annotation_row = df,show_rownames = FALSE,show_colnames = FALSE,border_color = 'black',fontsize = 32,main=tissue)
+```
+<b> The id and GO annotation of the 22 genes are in the file [Aorta.fished.out.immune.gene.xlsx](/Users/liuke/Project/GeneFishing/Manuscript/Tables/Aorta.fished.out.immune.gene.xlsx)</b>
+
+
+#---------------------------------------------------------------------------------------------
+#SECTION IV :  Comparision of Gene Fishing with other methods
+<b>Gene Fishing method</b>
+```{r}
+setwd('~/Project/GeneFishing/')
+load('RData/fishing.in.LCL.CHORI.ke.vs.GEUVADIS.RData')
+
+CHORI.LCL.caputre.freq           <-  CHORI.LCL.intersected.fish.freq.df$fish.freq
+names(CHORI.LCL.caputre.freq)    <-  CHORI.LCL.intersected.fish.freq.df$fish.id    %>% as.character
+GEUVADIS.LCL.caputre.freq        <-  GEUVADIS.LCL.intersected.fish.freq.df$fish.freq
+names(GEUVADIS.LCL.caputre.freq) <-  GEUVADIS.LCL.intersected.fish.freq.df$fish.id %>% as.character
+rs.gene.fishing                  <-  get.overlapping.between.two.score.list(CHORI.LCL.caputre.freq ,GEUVADIS.LCL.caputre.freq )
+```
+
+<b>Naive ranking method,median and mean</b>
+```{r}
+CHORI.LCL.compare.res        <- readRDS(file='~/Dropbox/GeneFishingProject/TalAnalysis/NaiveMethod/Naive_CHORI_Norm-Ke_Filter-GEU.RDS')
+GEUVADIS.LCL.compare.res     <- readRDS(file = '~/Dropbox/GeneFishingProject/TalAnalysis/NaiveMethod/Naive_GEUVADIS_Filter-ChoriKe.RDS')
+
+CHORI.LCL.naive.median    <- sort(CHORI.LCL.compare.res[['score.median']],   decreasing = T)
+GEUVADIS.LCL.naive.median <- sort(GEUVADIS.LCL.compare.res[['score.median']],decreasing = T)
+rs.naive.median           <- get.overlapping.between.two.score.list(CHORI.LCL.naive.median,GEUVADIS.LCL.naive.median)
+
+CHORI.LCL.naive.mean      <- sort(CHORI.LCL.compare.res[['score.mean']],   decreasing = T)
+GEUVADIS.LCL.naive.mean   <- sort(GEUVADIS.LCL.compare.res[['score.mean']],decreasing = T)
+rs.naive.mean <- get.overlapping.between.two.score.list(CHORI.LCL.naive.mean,GEUVADIS.LCL.naive.mean)
+
+
+CHORI.LCL.naive.max      <- sort(CHORI.LCL.compare.res[['score.max']],   decreasing = T)
+GEUVADIS.LCL.naive.max   <- sort(GEUVADIS.LCL.compare.res[['score.max']],decreasing = T)
+rs.naive.max             <- get.overlapping.between.two.score.list(CHORI.LCL.naive.max,GEUVADIS.LCL.naive.max)
+
+
+```
+
+<b>RWR method</b>
+```{r}
+setwd('~/Project/GeneFishing/')
+load('RData/compare.with.RWR.RData')
+rs.RWR <- get.overlapping.between.two.score.list(CHORI.RWR.score,GEUVADIS.RWR.score)
+```
+
+<b>WGCNA method </b>
+```{r}
+load(file='~/Dropbox/GeneFishingProject/TalAnalysis/WGCNA/WGCNA_results.full.RData')
+get.cluster.bait.percentage <- function(x){
+    gene.id <- as.character(x$gene.id)  
+    sum(gene.id %in% bait) / nrow(x)
+}
+chori.cluster.df <- data.frame(gene.id = names(net.chori$colors),cluster.color=net.chori$colors)
+tmp              <- ddply(chori.cluster.df,.(cluster.color),get.cluster.bait.percentage)
+tmp              <- merge(chori.cluster.df,tmp)
+chori.wgcna.score        <- tmp$V1
+names(chori.wgcna.score) <- tmp$gene.id %>% as.character
+chori.wgcna.score        <- chori.wgcna.score[!(names(chori.wgcna.score) %in% bait)]
+
+geuvadis.cluster.df <- data.frame(gene.id = names(net.geuvadis$colors),cluster.color=net.geuvadis$colors)
+tmp                 <- ddply(geuvadis.cluster.df,.(cluster.color),get.cluster.bait.percentage)
+tmp                 <- merge(geuvadis.cluster.df,tmp)
+geuvadis.wgcna.score        <- tmp$V1
+names(geuvadis.wgcna.score) <- tmp$gene.id %>% as.character
+geuvadis.wgcna.score        <- geuvadis.wgcna.score[!(names(geuvadis.wgcna.score) %in% bait)]
+
+rs.wgcna <- get.overlapping.between.two.score.list(chori.wgcna.score,geuvadis.wgcna.score)
+```
+
+
+<b> Draw the curve</b>
+```{r}
+top.cnt <- seq(from=20,to=100,by=1)
+prism.plot(x=top.cnt,y=rs.gene.fishing,col='red',xlab='rank',ylab='number of overlapped genes',ylim=c(0,40),pch=19)
+lines(top.cnt,rs.gene.fishing,col='red',    lwd=3,pch=19,type='o')
+lines(top.cnt,rs.naive.median,col='black',  lwd=3,pch=19,type='o')
+lines(top.cnt,rs.naive.mean,  col='blue',   lwd=3,pch=19,type='o')
+lines(top.cnt,rs.naive.max,   col='green',   lwd=3,pch=19,type='o')
+
+lines(top.cnt,rs.wgcna,       col='orange', lwd=3,pch=19,type='o')
+lines(top.cnt,rs.RWR,         col='purple', lwd=3,pch=19,type='o')
+
+```
+
+
+
+#---------------------------------------------------------------------------------------------
+#SECTION V :  Supplementary figures
+```{r}
+pdf('tissue.supp.pdf')
+foreach(tissue = fishable.tissue) %do%{
+    expr.matrix <-  normalized.GTex.data[[tissue]]  
+    gene        <-  cholesterol.gene[cholesterol.gene %in% colnames(expr.matrix)]
+    gene        <-  c(bait,setdiff(gene,bait))
+    A           <-  cor(expr.matrix[,gene],method='spearman') %>% abs
+    rs          <-  get.spectral.clustering.coordinates(A,method.name='berkeley.405',force.no.of.cluster = 2)
+    
+    
+    cluster.rs  <- kmeanspp(rs$coordinates,k=rs$no.of.cluster)
+    cluster.vec <- cluster.rs$cluster
+    if(sum(cluster.vec==1) > length(cluster.vec) * 0.5){
+        cluster.vec[cluster.vec==1] <- 3
+        cluster.vec[cluster.vec==2] <- 1
+        cluster.vec[cluster.vec==3] <- 2
+    }
+    cluster.vec <- sort(cluster.vec)
+    
+    
+    
+    df          <- data.frame( 
+                           is.bait.gene       =  (names(cluster.vec) %in% bait)  %>% as.integer %>% factor,
+                           cluster.membership =  cluster.vec %>% factor(levels=c(2,1))
+                         )
+    rownames(df) <- names(cluster.vec)
+    
+    
+    pheatmap(A[names(cluster.vec),names(cluster.vec)],cluster_rows = F,cluster_cols = F,annotation_row = df,show_rownames = FALSE,show_colnames = FALSE,main = tissue,fontsize = 18,width = 1011,height=900)
+    
+    coordinates <- rs$coordinates[names(cluster.vec),]
+    pch.vec     <- ifelse(rownames(coordinates) %in% bait,19,15)
+    col.vec     <- c('red','black')[cluster.vec]
+    prism.plot(x=coordinates[,1],y=coordinates[,2],pch=pch.vec,cex=2,col=col.vec,xlab='eigen-1',ylab='eigen-2')
+
+}
+dev.off()
+```
+
+
+
+#---------------------------------------------------------------------------------------------
+#SECTION VI :  Supplementary Table which contains the gene fishing results of CAP-LCL and the 14 fishable tissues
+
+
+
+
+#---------------------------------------------------------------------------------------------
+#Trash
+
+
+```{r}
+# load('RData/CHORI.peer.normalized.rpkm.RData')
+# CHORI.LCL.data            <- peer.normalized.rpkm.25
+# load('RData//GEUVADIS.peer.normalized.rpkm.RData')
+# GEUVADIS.LCL.data         <- peer.normalized.rpkm.25
+# common.gene               <- intersect(colnames(CHORI.LCL.data),colnames(GEUVADIS.LCL.data))
+# cholesterol.gene          <- cholesterol.gene[cholesterol.gene %in% common.gene]
+# cholesterol.gene          <- setdiff(cholesterol.gene,bait)
+# rd.gene                   <- sample(cholesterol.gene,21)
+# common.gene               <- setdiff(common.gene,cholesterol.gene)
+# 
+# CHORI.co.expr.matrix      <- cor(CHORI.LCL.data[,common.gene ],CHORI.LCL.data[,rd.gene ],method='spearman') %>% abs
+# CHORI.rank.list.mean      <- apply(CHORI.co.expr.matrix,1,mean)   %>% sort(decreasing = TRUE)
+# CHORI.rank.list.median    <- apply(CHORI.co.expr.matrix,1,median) %>% sort(decreasing = TRUE)
+# 
+# GEUVADIS.co.expr.matrix   <- cor(GEUVADIS.LCL.data[,common.gene ],GEUVADIS.LCL.data[,rd.gene ],method='spearman') %>% abs
+# GEUVADIS.rank.list.mean   <- apply(GEUVADIS.co.expr.matrix,1,mean) %>% sort(decreasing = TRUE)
+# GEUVADIS.rank.list.median <- apply(GEUVADIS.co.expr.matrix,1,median) %>% sort(decreasing = TRUE)
+# 
+# rs.mean <- foreach(i=top.cnt,.combine='c') %do%{
+#     intersect(names(CHORI.rank.list.mean)[1:i], names(GEUVADIS.rank.list.mean)[1:i])  %>% length 
+#   
+# }
+# rs.median <- foreach(i=top.cnt,.combine='c') %do%{
+#     intersect(names(CHORI.rank.list.median)[1:i], names(GEUVADIS.rank.list.median)[1:i])  %>% length 
+#   
+# }
+# points(top.cnt,rs.mean,col='orange',pch=19)
+# points(top.cnt,rs.median,col='purple',pch=19)
+# CHORI.LCL.compare.res        <- readRDS(file='~/Dropbox/GeneFishingProject/TalAnalysis/NaiveMethod/Naive_CHORI_Norm-Ke_Filter-GEU.RDS')
+# GEUVADIS.LCL.compare.res     <- readRDS(file = '~/Dropbox/GeneFishingProject/TalAnalysis/NaiveMethod/Naive_GEUVADIS_Filter-ChoriKe.RDS')
+# 
+# CHORI.LCL.naive.rank.list    <- sort(CHORI.LCL.compare.res[['score.median']],   decreasing = T)
+# GEUVADIS.LCL.naive.rank.list <- sort(GEUVADIS.LCL.compare.res[['score.median']],decreasing = T)
+# top.cnt <- seq(from=20,to=100,by=1)
+# the.100.trial <- foreach(j = 1:100 ) %do% {
+#     CHORI.LCL.gene.fishing.rank.list    <- rank(1-CHORI.LCL.caputre.freq,   ties.method = 'random')
+#     GEUVADIS.LCL.gene.fishing.rank.list <- rank(1-GEUVADIS.LCL.caputre.freq,ties.method = 'random')
+#     rs <- foreach(i=top.cnt,.combine='rbind') %do% {
+#         flag1 <- CHORI.LCL.gene.fishing.rank.list    <= i
+#         flag2 <- GEUVADIS.LCL.gene.fishing.rank.list <= i
+#     
+#     fishing.overlapping <- intersect( names(CHORI.LCL.gene.fishing.rank.list   )[flag1], 
+#                                       names(GEUVADIS.LCL.gene.fishing.rank.list)[flag2] 
+#     )  %>% length 
+#     naive.overlapping   <- intersect(  names(CHORI.LCL.naive.rank.list)[1:i],
+#                                        names(GEUVADIS.LCL.naive.rank.list)[1:i]
+#     )  %>% length
+#     c(fishing.overlapping,naive.overlapping)
+#     }
+#     rs
+# }
+# rs <- the.100.trial[[1]]
+# for(i in 2:100){
+#   rs <- rs + the.100.trial[[i]]  
+# }
+# rs <- rs/100
+# rs.median <- rs
+# 
+# 
+# 
+# CHORI.LCL.naive.rank.list    <- sort(CHORI.LCL.compare.res[['score.mean']],   decreasing = T)
+# GEUVADIS.LCL.naive.rank.list <- sort(GEUVADIS.LCL.compare.res[['score.mean']],decreasing = T)
+# top.cnt <- seq(from=20,to=99,by=1)
+# the.100.trial <- foreach(j = 1:100 ) %do% {
+#     CHORI.LCL.gene.fishing.rank.list    <- rank(1-CHORI.LCL.caputre.freq,   ties.method = 'random')
+#     GEUVADIS.LCL.gene.fishing.rank.list <- rank(1-GEUVADIS.LCL.caputre.freq,ties.method = 'random')
+#     rs <- foreach(i=top.cnt,.combine='rbind') %do% {
+#         flag1 <- CHORI.LCL.gene.fishing.rank.list    <= i
+#         flag2 <- GEUVADIS.LCL.gene.fishing.rank.list <= i
+#     
+#     fishing.overlapping <- intersect( names(CHORI.LCL.gene.fishing.rank.list   )[flag1], 
+#                                       names(GEUVADIS.LCL.gene.fishing.rank.list)[flag2] 
+#     )  %>% length 
+#     naive.overlapping   <- intersect(  names(CHORI.LCL.naive.rank.list)[1:i],
+#                                        names(GEUVADIS.LCL.naive.rank.list)[1:i]
+#     )  %>% length
+#     c(fishing.overlapping,naive.overlapping)
+#     }
+#     rs
+# }
+# rs <- the.100.trial[[1]]
+# for(i in 2:100){
+#   rs <- rs + the.100.trial[[i]]  
+# }
+# rs <- rs/100
+# rs.mean <- rs
+# 
+# plot(top.cnt,rs.median[,1],col='red',xlab='rank',ylab='number of overlapped genes',ylim=c(0,40),cex.axis=1.5,cex.lab=1.5,pch=19)
+# points(top.cnt,rs.median[,2],col='black',pch=19)
+# points(top.cnt,rs.mean[,2],col='blue',pch=19)
+# lines(top.cnt,rs.median[,1],col='red',lwd=3)
+# lines(top.cnt,rs.median[,2],col='black',lwd=3)
+# lines(top.cnt,rs.mean[,2],col='blue',lwd=3)
+# legend(legend = c('Gene Fishing','Guilt-By-Association(median)','Guilt-By-Association(mean)'),col=c('red','black','blue'),x='topleft',lwd=5,cex=0.8,text.font=2,text.width=10)
+# 
+# <b>WGCNA method</b>
+# ```{r}
+# load(file='~/Dropbox/GeneFishingProject/TalAnalysis/WGCNA/WGCNA_results.full.RData')
+# get.cluster.bait.percentage <- function(x){
+#     gene.id <- as.character(x$gene.id)  
+#     sum(gene.id %in% bait) / nrow(x)
+# }
+# chori.cluster.df <- data.frame(gene.id = names(net.chori$colors),cluster.color=net.chori$colors)
+# tmp              <- ddply(chori.cluster.df,.(cluster.color),get.cluster.bait.percentage)
+# tmp              <- merge(chori.cluster.df,tmp)
+# chori.wgcna.score        <- tmp$V1
+# names(chori.wgcna.score) <- tmp$gene.id %>% as.character
+# chori.wgcna.score        <- chori.wgcna.score[!(names(chori.wgcna.score) %in% bait)]
+# 
+# geuvadis.cluster.df <- data.frame(gene.id = names(net.geuvadis$colors),cluster.color=net.geuvadis$colors)
+# tmp                 <- ddply(geuvadis.cluster.df,.(cluster.color),get.cluster.bait.percentage)
+# tmp                 <- merge(geuvadis.cluster.df,tmp)
+# geuvadis.wgcna.score        <- tmp$V1
+# names(geuvadis.wgcna.score) <- tmp$gene.id %>% as.character
+# geuvadis.wgcna.score        <- geuvadis.wgcna.score[!(names(geuvadis.wgcna.score) %in% bait)]
+# 
+# 
+# the.100.trial <- foreach(j = 1:100 ) %do% {
+#     CHORI.LCL.wgcna.rank.list    <- rank(1-chori.wgcna.score,   ties.method = 'random')
+#     GEUVADIS.LCL.wgcna.rank.list <- rank(1-geuvadis.wgcna.score,ties.method = 'random')
+#     rs <- foreach(i=top.cnt,.combine='rbind') %do% {
+#         flag1 <- CHORI.LCL.wgcna.rank.list    <= i
+#         flag2 <- GEUVADIS.LCL.wgcna.rank.list <= i
+#     
+#     wgcna.overlapping <- intersect( names(CHORI.LCL.wgcna.rank.list   )[flag1], 
+#                                     names(GEUVADIS.LCL.wgcna.rank.list)[flag2] 
+#     )  %>% length 
+#     
+#     c(wgcna.overlapping)
+#     }
+#     rs
+# }
+# rs <- the.100.trial[[1]]
+# for(i in 2:100){
+#   rs <- rs + the.100.trial[[i]]  
+# }
+# rs <- rs/100
+# rs.wgcna <- rs
+# points(top.cnt,rs.wgcna,col='orange',pch=19)
+# lines(top.cnt,rs.wgcna,col='orange',lwd=3)
+# <b>Random walk method</b>
+# setwd('~/Project/GeneFishing/')
+# load('RData/compare.with.RWR.RData')
+# points(top.cnt,rs.rd.walk,col='purple',pch=19)
+# lines(top.cnt,rs.rd.walk,col='purple',lwd=3)
+```
+
