@@ -44,8 +44,8 @@ probe.fishability <- function(bait.gene, expr.matrix,alpha=5){
     bait.gene <- bait.gene[bait.gene %in% colnames(expr.matrix)]
     all.gene  <- colnames(expr.matrix)      
     pool.gene <- setdiff(all.gene,bait.gene)
-    bait.cluster.purity.matrix <- foreach(k =c(2:10),.combine='rbind') %do%{
-        bait.cluster.purity      <- foreach(i= 1:1000,.combine='c') %dopar% {
+    bait.cluster.purity.matrix <- foreach(k =c(2:10),.combine='cbind') %do%{
+        bait.cluster.purity    <- foreach(i= 1:1000,.combine='c') %dopar% {
             bait.gene.expr.matrix          <- expr.matrix[,bait.gene]
             rd.gene                        <- sample(pool.gene,size=length(bait.gene) * alpha)
             bait.and.pool.gene.expr.matrix <- cbind(expr.matrix[,bait.gene],expr.matrix[,rd.gene])
@@ -118,8 +118,11 @@ do.gene.fishing <- function(bait.gene, expr.matrix,alpha=5,fishing.round=1000){
     fish.freq.df$fish.freq  <- fish.freq.df$fish.freq / fishing.round
     fish.freq.df            <- arrange(fish.freq.df,desc(fish.freq))
     fish.freq.df            <- fish.freq.df[fish.freq.df$fish.id != 'NOTHING',]
-    df                      <- data.frame(fish.id=setdiff(pool.gene.bait.gene),fish.freq=0)
+    df                      <- data.frame(fish.id=setdiff(pool.gene,fish.freq.df$fish.id %>% as.character),fish.freq=0)
     fish.freq.df            <- rbind(fish.freq.df,df)
+    p.hat                   <- mean(fish.freq.df$fish.freq)
+    fish.freq.df$p.value    <- pbinom(fish.freq.df$fish.freq * fishing.round,fishing.round,p.hat,lower.tail = FALSE)
+    fish.freq.df$adjusted.p.value <- p.adjust(fish.freq.df$p.value,method='bonferroni')
     fish.freq.df 
 }
 
