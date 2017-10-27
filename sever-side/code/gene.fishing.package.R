@@ -89,7 +89,7 @@ do.gene.fishing <- function(bait.gene, expr.matrix,alpha=5,fishing.round=1000){
         }  
         l
     }
-    sub.pool.list <- unlist(tmp,recursive = F)
+    sub.pool.list <- unlist(tmp,recursive = FALSE)
     fish.vec      <- foreach(sub.pool = sub.pool.list,.combine='c') %dopar% {
         bait.gene.expr.matrix          <- expr.matrix[,bait.gene]
         rd.gene                        <- sub.pool
@@ -126,8 +126,7 @@ do.gene.fishing <- function(bait.gene, expr.matrix,alpha=5,fishing.round=1000){
     fish.freq.df$p.value    <- pbinom(fish.freq.df$fish.freq * fishing.round,fishing.round,p.hat,lower.tail = FALSE)
     fish.freq.df$adjusted.p.value <- p.adjust(fish.freq.df$p.value,method='bonferroni')
     colnames(fish.freq.df)        <- c('gene.id','CFR','p.value','adjusted.p.value')
-    f
-    ish.freq.df 
+    fish.freq.df 
 }
 
 
