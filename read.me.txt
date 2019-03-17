@@ -1,0 +1,11 @@
+To reproduce GeneFishing results in GTEx tissues:
+1. Create a folder on your laptop, download all the content of this repository (DO NOT forget the data folder, the c1.csv records the id of the 21 bait genes).
+2. Please go to https://www.synapse.org/#!Synapse:syn18434549/files/ to download the normalized.GTex.with.ncRNA.median.larger.than.0.1.RData  into the data sub-folder.
+3. Run the fishing.in.GTex.data.R.
+
+
+
+Tips:
+1. You may need to install some R packages (such as dplyr, foreach, LICORS, doParallel) before running the script,.
+2. It is highly recommended that you run the script on a server, instead of your own laptop.
+3. Please contact keliu.iluke@gmail.com if you have any questions. Any feedback and comments are also warmly welcome.
