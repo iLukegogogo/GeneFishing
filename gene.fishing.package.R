@@ -41,41 +41,6 @@ get.spectral.clustering.coordinates <- function(A,no.of.eigen.vector=0){
 
 
 
-probe.fishability <- function(bait.gene, expr.matrix,alpha=5){
-    bait.gene <- bait.gene[bait.gene %in% colnames(expr.matrix)]
-    all.gene  <- colnames(expr.matrix)      
-    pool.gene <- setdiff(all.gene,bait.gene)
-    bait.cluster.tightness.matrix <- foreach(j = 2:10, .combine='cbind') %do%{
-        bait.cluster.tightness    <- foreach(i = 1:1000,.combine='c') %dopar% {
-            bait.gene.expr.matrix          <- expr.matrix[,bait.gene]
-            rd.gene                        <- sample(pool.gene,size=length(bait.gene) * alpha)
-            bait.and.pool.gene.expr.matrix <- cbind(expr.matrix[,bait.gene],expr.matrix[,rd.gene])
-            bait.and.pool.gene.cor.matrix  <- cor(bait.and.pool.gene.expr.matrix,method='spearman')
-            rs                             <- get.spectral.clustering.coordinates(bait.and.pool.gene.cor.matrix,j)
-            
-            coordinates                    <- rs[['coordinates']]
-            kmeans.obj                     <- kmeanspp(data=coordinates,k=2)
-            cluster.vec                    <- kmeans.obj$cluster
-            names(cluster.vec)             <- rownames(coordinates)
-            cluster.freq.df                <- table(cluster.vec[bait.gene]) %>% as.data.frame
-            cluster.freq.df                <- cluster.freq.df[order(cluster.freq.df$Freq,decreasing = TRUE),]
-            value                          <- cluster.freq.df$Var1[1] %>% as.character %>% as.integer
-            f1                             <- cluster.vec == value
-            f2                             <- names(cluster.vec) %in% bait.gene
-            
-            d1 <- (dist(coordinates[f1,])   %>% as.matrix %>% sum)
-            d  <- (dist(coordinates)        %>% as.matrix %>% sum)
-            d1/d
-        }
-        bait.cluster.tightness
-    }
-    colnames(bait.cluster.tightness.matrix) <- paste("no.of.eigen.vector=",2:10,sep="")
-    bait.cluster.tightness.matrix    
-}
-
-
-
-
 do.gene.fishing <- function(bait.gene, expr.matrix,alpha=5,fishing.round=1000){
     bait.gene <- bait.gene[bait.gene %in% colnames(expr.matrix)]
     all.gene  <- colnames(expr.matrix)      
