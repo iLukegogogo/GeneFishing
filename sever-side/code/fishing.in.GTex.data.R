@@ -7,8 +7,6 @@ registerDoParallel(40)
 
 c1        <- read.table("./raw.data/c1.csv", header=FALSE,stringsAsFactors=FALSE)[,1]
 
-
-
 probe.result <- foreach( tissue  = names(normalized.GTex.data) )%do%{
     tissue.expr.matrix <- normalized.GTex.data[[tissue]]
     if(nrow(tissue.expr.matrix) <100){
@@ -19,8 +17,6 @@ probe.result <- foreach( tissue  = names(normalized.GTex.data) )%do%{
     }
 }
 names(probe.result) <- names(normalized.GTex.data)
-
-
 
 
 
