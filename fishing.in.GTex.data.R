@@ -19,7 +19,7 @@ fish.list <- foreach( tissue  = names(normalized.GTex.data) )%do%{
 }
 names(fish.list) <- names(normalized.GTex.data)
 
-save(file='fishing.in.GTex.with.ncRNA.median.rpkm.larger.than.0.1.RData',list=c('fish.list'，'probe.result'))
+save(file='fishing.in.GTex.with.ncRNA.median.rpkm.larger.than.0.1.RData',list=c('fish.list'))
 
 
 
