@@ -4,7 +4,6 @@ To reproduce GeneFishing results in GTEx tissues:
 3. Run fishing.in.GTex.data.R.
 
 
-
 Tips:
 1. You may need to install some R packages (such as dplyr, foreach, LICORS, doParallel) before running the script,.
 2. It is highly recommended that you run the script on a server, instead of your own laptop.
@@ -13,5 +12,21 @@ Tips:
 
 Files:
 data/c1.csv: the 21 cholesterol bio-synthesis pathway genes, used as bait genes in the paper.
-
 data/immune.bait.csv: newly-identified 16 bait genes related to immune system, used in the rebuttal letter.
+
+
+
+To run GeneFishing on your gene expression dataset:
+1. Load your gene expression data into a R matrix object (here suppose the name of the matrix is sample.expr.matrix)
+2. Load your pre-defined bait gene into a R vector object (here suppose the name of the vectpr is sample.bait.gene)
+3. Call the function like this:
+
+source('gene.fishing.package.R')
+require(dplyr)
+require(foreach)
+require(doParallel)
+registerDoParallel(40)
+fish.freq.df <- do.gene.fishing(bait.gene = sample.bait.gene,expr.matrix = sample.expr.matrix,alpha=5,fishing.round=1000)
+  
+
+
