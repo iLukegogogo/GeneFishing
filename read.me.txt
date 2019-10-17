@@ -16,7 +16,7 @@ data/immune.bait.csv: newly-identified 16 bait genes related to immune system, u
 
 
 
-To run GeneFishing on your gene expression dataset:
+To run GeneFishing on your own gene expression dataset:
 1. Load your gene expression data into a R matrix object (here suppose the name of the matrix is sample.expr.matrix, rows are associated with samples and columns are associated with genes)
 2. Load your pre-defined bait gene into a R vector object (here suppose the name of the vectpr is sample.bait.gene)
 3. Call the function like this:
