@@ -28,7 +28,7 @@ require(doParallel)
 registerDoParallel(40)
 fish.freq.df <- do.gene.fishing(bait.gene = sample.bait.gene,expr.matrix = sample.expr.matrix,alpha=5,fishing.round=1000)
 
-The tuning paramater alpha is used to determine the size of the split. Say, suppose you have n bait genes, then the split size is (1+alpha) * n.
+The tuning paramater alpha is used to control the size of the subsearch space. Say, suppose you have n bait genes, then the  size will be (1+alpha) * n.
   
 
 
